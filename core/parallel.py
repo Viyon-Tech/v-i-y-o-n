@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 
 from agents.base_agent import AgentResult
 from core.router import AgentTask, RoutePlan
@@ -47,26 +46,20 @@ async def run_agents(plan: RoutePlan, agents: dict, ctx: dict) -> list[AgentResu
 
 async def _run_one(task: AgentTask, agent, ctx: dict) -> AgentResult:
     """Run a single agent, wrapping a missing agent or exception as a failure."""
-    start = time.perf_counter()
     if agent is None:
         logger.warning("No agent registered named %r; skipping.", task.name)
         return AgentResult(
             agent=task.name,
-            task=task.task,
             ok=False,
-            error=f"No agent registered named {task.name!r}",
-            duration_ms=0,
+            summary=f"No agent registered named {task.name!r}",
         )
     try:
-        result = await agent.run(task.task, ctx)
+        return await agent.run(task.task, ctx)
     except Exception as exc:
         logger.warning("Agent %s failed: %s", task.name, exc)
-        result = AgentResult(
+        return AgentResult(
             agent=task.name,
-            task=task.task,
             ok=False,
-            error=f"{type(exc).__name__}: {exc}",
+            summary=f"{task.name} hit an error.",
+            detail=f"{type(exc).__name__}: {exc}",
         )
-    if result.duration_ms is None:
-        result.duration_ms = int((time.perf_counter() - start) * 1000)
-    return result

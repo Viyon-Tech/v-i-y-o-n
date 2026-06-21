@@ -111,11 +111,14 @@ class _EchoAgent(BaseAgent):
         self.name = name
 
     async def run(self, task, ctx):
-        return AgentResult(agent=self.name, task=task, ok=True, output=f"{self.name} did {task}")
+        return AgentResult(agent=self.name, ok=True, summary=f"{self.name} did {task}")
 
 
 class _BoomAgent(BaseAgent):
     name = "SHIELD"
+
+    def __init__(self):
+        pass
 
     async def run(self, task, ctx):
         raise RuntimeError("kaboom")
@@ -131,7 +134,7 @@ async def test_parallel_runs_all_agents():
 
     assert len(results) == 2
     assert all(r.ok for r in results)
-    assert all(r.duration_ms is not None for r in results)
+    assert {r.agent for r in results} == {"NOVA", "PULSE"}
 
 
 async def test_sequential_threads_prior_results_into_ctx():
@@ -141,9 +144,12 @@ async def test_sequential_threads_prior_results_into_ctx():
     class _ContextAware(BaseAgent):
         name = "NOVA"
 
+        def __init__(self):
+            pass
+
         async def run(self, task, ctx):
             seen["prior"] = ctx.get("prior_results", [])
-            return AgentResult(agent=self.name, ok=True, output="done")
+            return AgentResult(agent=self.name, ok=True, summary="done")
 
     plan = RoutePlan(
         agents=[AgentTask(name="PULSE", task="research"), AgentTask(name="NOVA", task="build")],
@@ -167,7 +173,7 @@ async def test_agent_exception_is_isolated():
 
     by_name = {r.agent: r for r in results}
     assert by_name["SHIELD"].ok is False
-    assert "kaboom" in by_name["SHIELD"].error
+    assert "kaboom" in by_name["SHIELD"].detail
     assert by_name["NOVA"].ok is True
 
 
@@ -175,4 +181,4 @@ async def test_unknown_agent_becomes_failed_result():
     plan = RoutePlan(agents=[AgentTask(name="MYSTERY", task="x")], parallel=False)
     results = await run_agents(plan, agents={}, ctx={})
     assert results[0].ok is False
-    assert "MYSTERY" in results[0].error
+    assert "MYSTERY" in results[0].summary

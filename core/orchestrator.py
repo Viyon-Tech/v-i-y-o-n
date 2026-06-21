@@ -126,8 +126,8 @@ class VIYONCore:
         if not results:
             return "I didn't have anything to run for that."
 
-        successes = [r.output for r in results if r.ok and r.output]
-        failures = [f"{r.agent} couldn't finish: {r.error}" for r in results if not r.ok]
+        successes = [r.summary for r in results if r.ok and r.summary]
+        failures = [f"{r.agent} couldn't finish: {r.detail or r.summary}" for r in results if not r.ok]
         fallback = " ".join(successes + failures) or "Done."
 
         try:
@@ -141,7 +141,7 @@ class VIYONCore:
         """Ask Claude to merge agent outputs into a natural spoken reply."""
         length = "one or two sentences" if plan.reply_style == "short" else "a few sentences"
         summary = "\n".join(
-            f"- {r.agent}: {'OK' if r.ok else 'FAILED'} — {r.output or r.error or ''}"
+            f"- {r.agent}: {'OK' if r.ok else 'FAILED'} — {r.summary or r.detail or ''}"
             for r in results
         )
         system = (
