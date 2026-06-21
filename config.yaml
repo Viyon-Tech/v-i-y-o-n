@@ -1,0 +1,43 @@
+# VIYON configuration. Non-secret settings only — secrets live in .env.
+
+voice:
+  wake_word: VIYON
+  whisper_model: mlx-community/whisper-large-v3-turbo
+  tts_voice_id: ""            # ElevenLabs voice id
+
+llm:
+  model: claude-sonnet-4-20250514
+  max_tokens: 4096
+
+agents:
+  enabled:
+    - NOVA
+    - FORGE
+    - SHIELD
+    - PULSE
+    - ATLAS
+    - ECHO
+    - NEXUS
+    - VISTA
+    - TEMPO
+    - SAGE
+    - LUNA
+    - GHOST
+
+safety:
+  # Action types that MUST pass through the Approval Gate before running.
+  require_confirm_for:
+    - delete
+    - overwrite
+    - git_push
+    - kill_process
+    - send_email
+    - run_shell
+
+hud:
+  host: 127.0.0.1
+  port: 8765
+
+logging:
+  dir: ~/.viyon/logs
+  level: INFO

@@ -1,0 +1,52 @@
+[project]
+name = "viyon"
+version = "0.1.0"
+description = "VIYON — Voice-Intelligent Operational Network: a local-first, voice-controlled, multi-agent AI operating layer for macOS (Apple Silicon)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "vignes-vm" }]
+
+dependencies = [
+    "anthropic",
+    "mlx-whisper",
+    "faster-whisper",
+    "pvporcupine",
+    "sounddevice",
+    "numpy",
+    "elevenlabs",
+    "pyobjc",
+    "pyautogui",
+    "psutil",
+    "fastapi",
+    "uvicorn",
+    "websockets",
+    "python-dotenv",
+    "pyyaml",
+    "pydantic",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+]
+
+[project.scripts]
+viyon = "main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["core", "agents", "tools", "integrations", "logs", "hud"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

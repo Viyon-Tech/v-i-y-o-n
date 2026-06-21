@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- VIYON-specific ---
+# Runtime data dir (NOT the logs/ source package, which IS tracked)
+~/.viyon/
+.viyon/
+*.db
