@@ -25,6 +25,9 @@ agents:
     - GHOST
 
 safety:
+  # If true, "low" risk actions auto-approve without asking — UNLESS the action
+  # is listed in require_confirm_for below (that list always asks).
+  auto_approve_low: false
   # Action types that MUST pass through the Approval Gate before running.
   require_confirm_for:
     - delete
