@@ -15,7 +15,7 @@ import logging
 import time
 
 from agents.base_agent import AgentResult
-from core import config, parallel
+from core import config, events, parallel
 from core.listener import Listener
 from core.memory import SessionMemory
 from core.router import RoutePlan, Router
@@ -67,6 +67,8 @@ class VIYONCore:
         self.memory.add_user(transcript)
         cmd_id = self.log.log_command({"raw_input": transcript, "status": "pending"})
         ctx = {"history": self.memory.get_context(), "command_id": cmd_id}
+        events.emit_reset()
+        events.emit_command(transcript)
 
         # 1) Route.
         try:
@@ -87,8 +89,12 @@ class VIYONCore:
         if plan.needs_confirm or high_risk:
             detail = "; ".join(f"{a.name}: {a.task}" for a in plan.agents) or transcript
             risk = "high" if high_risk else "medium"
+            events.emit_alert(True)
             approved = await self.approval.request("execute_plan", detail, risk)
+            events.emit_alert(False)
             if not approved:
+                for a in plan.agents:
+                    events.emit_agent(a.name, "idle")
                 self.log.update_command(
                     cmd_id, status="aborted", confirmed=False, result="aborted by user"
                 )
@@ -96,8 +102,12 @@ class VIYONCore:
                 return None
             confirmed = True
 
-        # 3) Run the agents.
+        # 3) Run the agents (HUD: mark them working, then done).
+        for a in plan.agents:
+            events.emit_agent(a.name, "working", active=True)
         results = await parallel.run_agents(plan, self.agents, ctx)
+        for r in results:
+            events.emit_agent(r.agent, "done" if r.ok else "idle")
 
         # 4) Compose a natural spoken reply.
         merged = await self._merge(transcript, plan, results)
@@ -166,7 +176,9 @@ class VIYONCore:
         try:
             while True:
                 await self.wake.wait_for_wake()
+                events.emit_listening(True)
                 transcript = await self.listener.listen()
+                events.emit_listening(False)
                 if not transcript.strip():
                     continue
                 await self.handle(transcript)

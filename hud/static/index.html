@@ -1,14 +1,94 @@
 <!DOCTYPE html>
-<!-- TODO: VIYON HUD — Stark-style heads-up display. Scaffold only; markup to come. -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>VIYON HUD</title>
-    <link rel="stylesheet" href="style.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>VIYON · HUD</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Oswald:wght@300;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/style.css" />
   </head>
-  <body>
-    <!-- TODO: HUD canvas + live agent panels -->
-    <script src="hud.js"></script>
+  <body class="booting">
+    <!-- Ambient edge bar-graphs (data-bound, decorative) -->
+    <canvas id="ambient-left" class="ambient ambient-left"></canvas>
+    <canvas id="ambient-right" class="ambient ambient-right"></canvas>
+
+    <!-- Centerpiece reactor -->
+    <main class="stage">
+      <canvas id="reactor"></canvas>
+      <div class="reactor-caption">
+        <span class="eyebrow">VIYON</span>
+        <span id="core-state" class="core-state">CORE</span>
+      </div>
+    </main>
+
+    <!-- TOP-LEFT · system vitals -->
+    <section class="panel panel-tl" data-corner>
+      <header class="panel-head"><span class="eyebrow">SYSTEM VITALS</span></header>
+      <div class="vital">
+        <span class="vital-label">CPU</span>
+        <div class="bar"><i id="bar-cpu" class="bar-fill"></i></div>
+        <span id="val-cpu" class="vital-val">--</span>
+      </div>
+      <div class="vital">
+        <span class="vital-label">MEM</span>
+        <div class="bar"><i id="bar-mem" class="bar-fill"></i></div>
+        <span id="val-mem" class="vital-val">--</span>
+      </div>
+      <div class="vital">
+        <span class="vital-label">DSK</span>
+        <div class="bar"><i id="bar-disk" class="bar-fill"></i></div>
+        <span id="val-disk" class="vital-val">--</span>
+      </div>
+      <canvas id="spark-cpu" class="sparkline"></canvas>
+      <div class="net-line">
+        <span>NET ▲ <b id="val-up">0</b> KB/S</span>
+        <span>▼ <b id="val-down">0</b> KB/S</span>
+      </div>
+    </section>
+
+    <!-- TOP-RIGHT · clock / date / weather -->
+    <section class="panel panel-tr" data-corner>
+      <div id="clock" class="clock">--:--:--</div>
+      <div id="date" class="date">—</div>
+      <div class="divider"></div>
+      <div class="meta-row"><span class="eyebrow">WEATHER</span><span id="weather">—</span></div>
+      <div class="meta-row"><span class="eyebrow">BATTERY</span><span id="battery">—</span></div>
+      <div class="meta-row"><span class="eyebrow">LINK</span><span id="link-state">OFFLINE</span></div>
+    </section>
+
+    <!-- BOTTOM-LEFT · command log -->
+    <section class="panel panel-bl" data-corner>
+      <header class="panel-head"><span class="eyebrow">COMMAND LOG</span></header>
+      <ul id="cmdlog" class="cmdlog"></ul>
+      <form id="cmdform" class="cmdform" autocomplete="off">
+        <span class="prompt">›</span>
+        <input id="cmdinput" type="text" placeholder="TYPE A COMMAND…" />
+      </form>
+    </section>
+
+    <!-- BOTTOM-RIGHT · active agent -->
+    <section class="panel panel-br" data-corner>
+      <header class="panel-head"><span class="eyebrow">ACTIVE AGENT</span></header>
+      <div class="active-agent">
+        <span id="active-emoji" class="active-emoji">◈</span>
+        <div>
+          <div id="active-name" class="active-name">STANDBY</div>
+          <div id="active-status" class="active-status">IDLE</div>
+        </div>
+      </div>
+      <div id="agent-grid" class="agent-grid"></div>
+    </section>
+
+    <!-- Boot overlay -->
+    <div id="boot" class="boot-overlay">
+      <div id="boot-text" class="boot-text"></div>
+    </div>
+
+    <script src="/static/hud.js"></script>
   </body>
 </html>
