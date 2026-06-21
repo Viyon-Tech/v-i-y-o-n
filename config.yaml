@@ -9,6 +9,13 @@ llm:
   model: claude-sonnet-4-20250514
   max_tokens: 4096
 
+coding:
+  # claude-code MCP server backing NOVA/FORGE (codeaashu/claude-code, mcp-server/).
+  mcp_url: http://localhost:3000/mcp
+  mcp_server_script: ~/viyon/claude-code/mcp-server/dist/index.js
+  project_path: ""            # active project NOVA/FORGE operate on (blank = cwd)
+  editor: Visual Studio Code  # editor FORGE opens new projects in
+
 agents:
   enabled:
     - NOVA

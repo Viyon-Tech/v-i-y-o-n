@@ -79,10 +79,16 @@ async def make_dir(path, allowed_roots=None) -> tuple[bool, str]:
 # -- mutations (gated) -------------------------------------------------------
 
 async def write_file(path, content: str, approval=None, allowed_roots=None,
-                     risk: str = "medium") -> tuple[bool, str]:
-    """Write text to a file (creating parents). Gated."""
+                     risk: str = "medium", require_approval: bool = True) -> tuple[bool, str]:
+    """Write text to a file (creating parents). Gated unless ``require_approval`` is False.
+
+    ``require_approval=False`` lets a caller that already obtained one batch
+    approval (e.g. FORGE scaffolding many files) write without re-prompting.
+    """
     p = _validate(path, allowed_roots)
-    if not await _gate(approval, "write_file", f"write {len(content)} chars to {p}", risk):
+    if require_approval and not await _gate(
+        approval, "write_file", f"write {len(content)} chars to {p}", risk
+    ):
         return (False, "aborted: write not approved")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content)
@@ -112,10 +118,11 @@ async def copy(src, dst, approval=None, allowed_roots=None) -> tuple[bool, str]:
     return (True, f"copied {s} to {d}")
 
 
-async def delete(path, approval=None, allowed_roots=None) -> tuple[bool, str]:
+async def delete(path, approval=None, allowed_roots=None,
+                 require_approval: bool = True) -> tuple[bool, str]:
     """Delete a file or directory tree. Gated at HIGH risk."""
     p = _validate(path, allowed_roots)
-    if not await _gate(approval, "delete", f"delete {p}", "high"):
+    if require_approval and not await _gate(approval, "delete", f"delete {p}", "high"):
         return (False, "aborted: delete not approved")
     if p.is_dir():
         shutil.rmtree(p)

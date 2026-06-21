@@ -90,12 +90,19 @@ class BaseAgent(ABC):
 
     # -- helpers -----------------------------------------------------------
 
-    async def think(self, task: str, ctx: dict | None = None, tools: list | None = None) -> str:
+    async def think(
+        self,
+        task: str,
+        ctx: dict | None = None,
+        tools: list | None = None,
+        mcp_servers: list | None = None,
+    ) -> str:
         """Call Claude with this agent's persona and return the response text.
 
         Recent session turns from ``ctx['history']`` are folded into the prompt.
-        Pass ``tools`` (Anthropic tool/MCP definitions) to let the model call
-        them. Returns the concatenated text of the response's content blocks.
+        Pass ``tools`` (Anthropic tool definitions) and/or ``mcp_servers`` (remote
+        MCP connector configs) to let the model use them. Returns the
+        concatenated text of the response's content blocks.
         """
         ctx = ctx or {}
         history = ctx.get("history") or []
@@ -110,6 +117,9 @@ class BaseAgent(ABC):
         }
         if tools:
             kwargs["tools"] = tools
+        if mcp_servers:
+            kwargs["mcp_servers"] = mcp_servers
+            kwargs["extra_headers"] = {"anthropic-beta": "mcp-client-2025-04-04"}
 
         response = await self.llm.messages.create(**kwargs)
         return "".join(
