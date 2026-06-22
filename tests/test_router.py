@@ -9,7 +9,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import pytest
 
 from agents.base_agent import AgentResult, BaseAgent
 from core.parallel import run_agents

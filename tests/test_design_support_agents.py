@@ -10,7 +10,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import pytest
 
 from agents.luna import LunaAgent, _VALIDATION
 from agents.vista import VistaAgent

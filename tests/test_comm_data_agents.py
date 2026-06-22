@@ -10,7 +10,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import pytest
 
 from agents.echo import EchoAgent
 from agents.nexus import NexusAgent

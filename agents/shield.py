@@ -101,7 +101,7 @@ class ShieldAgent(BaseAgent):
             )
             if code != 0:
                 return self.fail(f"Couldn't list connections: {err[:200]}")
-            lines = [l for l in out.splitlines() if l.strip()][1:]
+            lines = [ln for ln in out.splitlines() if ln.strip()][1:]
             return self.succeed(
                 f"{len(lines)} listening port(s).", detail="\n".join(lines[:50])
             )

@@ -103,7 +103,16 @@ class BaseAgent(ABC):
         Pass ``tools`` (Anthropic tool definitions) and/or ``mcp_servers`` (remote
         MCP connector configs) to let the model use them. Returns the
         concatenated text of the response's content blocks.
+
+        Raises:
+            RuntimeError: if no LLM client is configured (no ANTHROPIC_API_KEY /
+                SDK). Callers that can degrade should catch this; the orchestrator
+                wraps it into a clean failed AgentResult.
         """
+        if self.llm is None:
+            raise RuntimeError(
+                "LLM unavailable — set ANTHROPIC_API_KEY and install the anthropic SDK."
+            )
         ctx = ctx or {}
         history = ctx.get("history") or []
         convo = "\n".join(f"{role}: {content}" for role, content in history[-6:])

@@ -94,7 +94,6 @@ class VIYONCore:
         results = await parallel.run_agents(plan, self.agents, ctx)
         for r in results:
             events.emit_agent(r.agent, "done" if r.ok else "idle")
-        confirmed = any(not r.ok and "abort" in (r.summary or "").lower() for r in results)
 
         # 3) Compose a natural spoken reply.
         merged = await self._merge(transcript, plan, results)
@@ -104,12 +103,14 @@ class VIYONCore:
         await self.speaker.say(merged)
         duration_ms = int((time.perf_counter() - start) * 1000)
         status = "ok" if results and all(r.ok for r in results) else "error"
+        # A command was "aborted" if an agent's gated action was denied.
+        aborted = any(not r.ok and "abort" in (r.summary or "").lower() for r in results)
         self.log.update_command(
             cmd_id,
-            status=status,
+            status="aborted" if aborted and status != "ok" else status,
             result="private entry" if private else merged,
             duration_ms=duration_ms,
-            confirmed=not confirmed,
+            confirmed=not aborted,
             steps=[] if private else [r.model_dump() for r in results],
         )
         return merged

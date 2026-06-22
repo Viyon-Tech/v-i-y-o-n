@@ -134,7 +134,11 @@ async def _run_one_agent(core: VIYONCore, name: str, task: str) -> None:
     if not agent:
         print(f"Unknown agent {name!r}. Options: {', '.join(core.agents)}")
         return
-    result = await agent.run(task, {"history": []})
+    try:
+        result = await agent.run(task, {"history": []})
+    except Exception as exc:
+        print(f"[{name.upper()}] failed: {type(exc).__name__}: {exc}")
+        return
     print(f"[{result.agent}] ok={result.ok}\n{result.summary}")
     if result.detail:
         print("---\n" + result.detail)
