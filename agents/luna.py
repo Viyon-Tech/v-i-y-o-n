@@ -79,11 +79,16 @@ class LunaAgent(BaseAgent):
             )
 
         # Validation is deterministic and always precedes the reflective part.
-        reflection = await self.think(
-            f"The person said: {message}\nReflect back warmly and ask one gentle, open "
-            f"question. Do not give advice or solutions.",
-            ctx,
-        )
+        # If the LLM is unavailable, LUNA still validates — it never hard-fails.
+        try:
+            reflection = await self.think(
+                f"The person said: {message}\nReflect back warmly and ask one gentle, open "
+                f"question. Do not give advice or solutions.",
+                ctx,
+            )
+        except Exception as exc:
+            logger.warning("LUNA reflection unavailable (%s); validating only.", exc)
+            reflection = "I'm here with you. Do you want to tell me more about it?"
         response = _VALIDATION + ("\n\n" + reflection if reflection else "")
         self._record(message, ctx)
         return self.succeed(response, detail=reflection or "")

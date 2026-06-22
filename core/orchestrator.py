@@ -64,11 +64,14 @@ class VIYONCore:
             return None
 
         start = time.perf_counter()
+        private = self._is_private(transcript)
         self.memory.add_user(transcript)
-        cmd_id = self.log.log_command({"raw_input": transcript, "status": "pending"})
-        ctx = {"history": self.memory.get_context(), "command_id": cmd_id}
+        cmd_id = self.log.log_command(
+            {"raw_input": "private entry" if private else transcript, "status": "pending"}
+        )
+        ctx = {"history": self.memory.get_context(), "command_id": cmd_id, "private": private}
         events.emit_reset()
-        events.emit_command(transcript)
+        events.emit_command("private entry" if private else transcript)
 
         # 1) Route.
         try:
@@ -79,53 +82,45 @@ class VIYONCore:
             return None
         self.log.update_command(
             cmd_id,
-            parsed_intent=plan.model_dump(),
+            parsed_intent={"private": True} if private else plan.model_dump(),
             agents=[a.name for a in plan.agents],
         )
 
-        # 2) Approval gate for confirm-required or high-risk plans.
-        high_risk = any(a.risk == "high" for a in plan.agents)
-        confirmed = False
-        if plan.needs_confirm or high_risk:
-            detail = "; ".join(f"{a.name}: {a.task}" for a in plan.agents) or transcript
-            risk = "high" if high_risk else "medium"
-            events.emit_alert(True)
-            approved = await self.approval.request("execute_plan", detail, risk)
-            events.emit_alert(False)
-            if not approved:
-                for a in plan.agents:
-                    events.emit_agent(a.name, "idle")
-                self.log.update_command(
-                    cmd_id, status="aborted", confirmed=False, result="aborted by user"
-                )
-                await self.speaker.say("Okay, cancelled.")
-                return None
-            confirmed = True
-
-        # 3) Run the agents (HUD: mark them working, then done).
+        # 2) Run the agents. Each agent gates its own destructive actions through
+        #    the Approval Gate (which flashes the HUD amber while it asks), so CORE
+        #    doesn't add a redundant plan-level prompt.
         for a in plan.agents:
             events.emit_agent(a.name, "working", active=True)
         results = await parallel.run_agents(plan, self.agents, ctx)
         for r in results:
             events.emit_agent(r.agent, "done" if r.ok else "idle")
+        confirmed = any(not r.ok and "abort" in (r.summary or "").lower() for r in results)
 
-        # 4) Compose a natural spoken reply.
+        # 3) Compose a natural spoken reply.
         merged = await self._merge(transcript, plan, results)
         self.memory.add_assistant(merged)
 
-        # 5) Speak and log.
+        # 4) Speak and log.
         await self.speaker.say(merged)
         duration_ms = int((time.perf_counter() - start) * 1000)
         status = "ok" if results and all(r.ok for r in results) else "error"
         self.log.update_command(
             cmd_id,
             status=status,
-            result=merged,
+            result="private entry" if private else merged,
             duration_ms=duration_ms,
-            confirmed=confirmed,
-            steps=[r.model_dump() for r in results],
+            confirmed=not confirmed,
+            steps=[] if private else [r.model_dump() for r in results],
         )
         return merged
+
+    @staticmethod
+    def _is_private(transcript: str) -> bool:
+        """True if the user signalled this command should not be logged in full."""
+        low = (transcript or "").lower()
+        cues = ("private", "privately", "between us", "don't log", "do not log",
+                "off the record", "keep this secret")
+        return any(cue in low for cue in cues)
 
     async def _merge(self, transcript: str, plan: RoutePlan, results: list[AgentResult]) -> str:
         """Compose one spoken reply from the agents' structured outputs.

@@ -48,12 +48,16 @@ class AtlasAgent(BaseAgent):
         low = text.lower()
 
         try:
-            # Open an application.
+            # Open an application (gated — it acts on the user's machine).
             m = re.search(r"\bopen (?:the )?(?:app(?:lication)? )?(.+)", low)
             if m and "file" not in low:
                 app = self._clean_app(m.group(1))
-                code, _, err = await mac_control.open_app(app)
-                return self._from_code(code, f"Opened {app}.", f"Couldn't open {app}: {err}")
+
+                async def _open() -> AgentResult:
+                    code, _, err = await mac_control.open_app(app)
+                    return self._from_code(code, f"Opened {app}.", f"Couldn't open {app}: {err}")
+
+                return await self.guarded("open_app", f"open {app}", "low", _open)
 
             # Quit an application (gated inside mac_control).
             m = re.search(r"\b(?:quit|close) (?:the )?(?:app(?:lication)? )?(.+)", low)

@@ -90,10 +90,25 @@ class ApprovalGate:
             self._record(action, detail, risk, approved=True, mode="auto")
             return True
 
-        answer = await self._ask(action, detail, risk)
+        # Flash the HUD amber while we actually wait on a decision.
+        self._emit_alert(True)
+        try:
+            answer = await self._ask(action, detail, risk)
+        finally:
+            self._emit_alert(False)
         approved = self._is_affirmative(answer)
         self._record(action, detail, risk, approved=approved, mode=self.mode)
         return approved
+
+    @staticmethod
+    def _emit_alert(on: bool) -> None:
+        """Signal the HUD's amber alert state (no-op if the bus is unavailable)."""
+        try:
+            from core import events
+
+            events.emit_alert(on)
+        except Exception:
+            pass
 
     async def _ask(self, action: str, detail: str, risk: str) -> str:
         """Invoke the front-end callback (awaiting it if async) and return the answer."""
