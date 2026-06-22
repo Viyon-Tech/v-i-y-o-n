@@ -16,10 +16,28 @@ so this module imports cleanly without the SDK installed.
 from __future__ import annotations
 
 import inspect
+import logging
+import re
 from abc import ABC, abstractmethod
 from typing import Any, Awaitable, Callable
 
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger("viyon.agent")
+
+# Approximate parameter counts (in billions) for local models whose tag has no
+# explicit size suffix. Used by the parallel RAM guard.
+_KNOWN_LOCAL_SIZES_B = {"phi4": 14.0, "phi3": 4.0, "mistral": 7.0, "gemma2": 9.0}
+
+
+def _parse_param_b(model: str) -> float | None:
+    """Best-effort parameter size in billions from a model tag (e.g. 'qwen2.5:14b' -> 14)."""
+    if not model:
+        return None
+    m = re.search(r"(\d+(?:\.\d+)?)\s*b\b", model.lower())
+    if m:
+        return float(m.group(1))
+    return _KNOWN_LOCAL_SIZES_B.get(model.lower().split(":")[0])
 
 
 class AgentResult(BaseModel):
@@ -97,29 +115,65 @@ class BaseAgent(ABC):
         tools: list | None = None,
         mcp_servers: list | None = None,
     ) -> str:
-        """Call Claude with this agent's persona and return the response text.
+        """Run this agent's persona prompt on its configured brain and return text.
 
-        Recent session turns from ``ctx['history']`` are folded into the prompt.
-        Pass ``tools`` (Anthropic tool definitions) and/or ``mcp_servers`` (remote
-        MCP connector configs) to let the model use them. Returns the
-        concatenated text of the response's content blocks.
+        The provider (claude | ollama) comes from config ``llm.agent_models`` for
+        this agent, falling back to ``llm.default_provider``. This only changes
+        *where* the model runs — the prompt, context, and returned text are the
+        same, so the agent's behavior contract is unchanged.
+
+        - ``tools``/``mcp_servers`` force the Claude path (tool-use is Claude-only).
+        - If the local (Ollama) model is unavailable and ``llm.fallback_to_claude``
+          is set, transparently fall back to Claude.
 
         Raises:
-            RuntimeError: if no LLM client is configured (no ANTHROPIC_API_KEY /
-                SDK). Callers that can degrade should catch this; the orchestrator
-                wraps it into a clean failed AgentResult.
+            RuntimeError: if the chosen path has no usable model (e.g. Claude
+                requested but no client, and no local fallback). The orchestrator
+                wraps this into a clean failed AgentResult.
         """
-        if self.llm is None:
-            raise RuntimeError(
-                "LLM unavailable — set ANTHROPIC_API_KEY and install the anthropic SDK."
-            )
         ctx = ctx or {}
         history = ctx.get("history") or []
         convo = "\n".join(f"{role}: {content}" for role, content in history[-6:])
         user = task if not convo else f"Context:\n{convo}\n\nTask: {task}"
 
+        provider, agent_model = self._provider_for()
+
+        # Tool-use / MCP only works on Claude — force it regardless of config.
+        if (tools or mcp_servers) and provider != "claude":
+            logger.info(
+                "%s: task needs MCP/tools — using Claude (local models can't do tool-use).",
+                self.name,
+            )
+            provider, agent_model = "claude", None
+
+        # -- local (Ollama) path, with fallback to Claude --------------------
+        if provider == "ollama":
+            from integrations.local_llm import LocalLLMUnavailable, think_local
+
+            model = agent_model or self.model
+            try:
+                return await think_local(
+                    model,
+                    self.system_prompt(),
+                    [{"role": "user", "content": user}],
+                    host=self._conf("llm", "ollama_host", "http://localhost:11434"),
+                )
+            except LocalLLMUnavailable as exc:
+                if not bool(self._conf("llm", "fallback_to_claude", True)):
+                    raise
+                logger.warning(
+                    "%s: local model %s unavailable (%s) — falling back to Claude.",
+                    self.name, model, exc,
+                )
+                agent_model = None  # use the Claude default below
+
+        # -- Claude path -----------------------------------------------------
+        if self.llm is None:
+            raise RuntimeError(
+                "LLM unavailable — set ANTHROPIC_API_KEY and install the anthropic SDK."
+            )
         kwargs: dict[str, Any] = {
-            "model": self.model,
+            "model": agent_model or self.model,
             "max_tokens": self.max_tokens,
             "system": self.system_prompt(),
             "messages": [{"role": "user", "content": user}],
@@ -134,6 +188,24 @@ class BaseAgent(ABC):
         return "".join(
             block.text for block in response.content if getattr(block, "type", None) == "text"
         ).strip()
+
+    # -- provider routing --------------------------------------------------
+
+    def _provider_for(self) -> tuple[str, str | None]:
+        """Resolve (provider, model) for this agent from config; default to claude."""
+        agent_models = self._conf("llm", "agent_models", {}) or {}
+        entry = agent_models.get(self.name) or {}
+        provider = (entry.get("provider") or self._conf("llm", "default_provider", "claude")).lower()
+        return provider, entry.get("model")
+
+    def is_heavy_local(self) -> bool:
+        """True if this agent runs a local model larger than ``llm.parallel_local_max_b``."""
+        provider, model = self._provider_for()
+        if provider != "ollama":
+            return False
+        size = _parse_param_b(model)
+        threshold = float(self._conf("llm", "parallel_local_max_b", 8))
+        return size is not None and size > threshold
 
     async def guarded(
         self,

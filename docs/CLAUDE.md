@@ -43,6 +43,27 @@ It opens with a Stark-style HUD ("the VIYON HUD").
 - HUD: local web app (HTML/CSS/Canvas/JS) served by FastAPI + WebSocket for live data
 - Config: config.yaml + python-dotenv
 
+## Hybrid LLM (Claude / Ollama, per-agent)
+Each agent's "brain" runs on either Claude or a local Ollama model, configured per agent.
+This changes only *where* the model runs — never an agent's prompt, capabilities, or behavior
+contract. `BaseAgent.think()` is the only routing point; `agents/run()` logic is unchanged.
+
+- **Per-agent provider map** — config `llm.agent_models[<AGENT>] = {provider, model}`, where
+  provider is `claude` or `ollama`. Missing entries fall back to `llm.default_provider`. The
+  Claude default model is `llm.model`; local models are Ollama tags (e.g. `qwen2.5:14b`).
+- **Ollama fallback rule** — if a local model is down or not pulled, `think_local` raises
+  `LocalLLMUnavailable`; when `llm.fallback_to_claude` is true, the agent transparently uses
+  Claude instead (logged as a warning) and never crashes. Local host is `llm.ollama_host`
+  (default `http://localhost:11434`).
+- **MCP-tool agents must use Claude** — tool-use / MCP connectors only work on the Claude path.
+  If `think()` is given `tools`/`mcp_servers` (NOVA/FORGE exploring a project), it forces the
+  Claude path regardless of the agent's configured provider, and logs why.
+- **Parallel RAM guard** — before a parallel run, `core/parallel.py` checks each agent's
+  provider/model. A local model larger than `llm.parallel_local_max_b` (default 8B) is "heavy";
+  if more than one heavy local model would run at once, those agents are serialized (run one at
+  a time) and it logs "serialized local agents to protect RAM". Claude agents and small (≤8B)
+  local agents still run in parallel.
+
 ## Repo layout (target)
 viyon/
   main.py

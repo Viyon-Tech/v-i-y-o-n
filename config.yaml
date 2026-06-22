@@ -6,8 +6,29 @@ voice:
   tts_voice_id: ""            # ElevenLabs voice id
 
 llm:
-  model: claude-sonnet-4-6
+  default_provider: claude
+  ollama_host: "http://localhost:11434"
+  fallback_to_claude: true          # if a local model is unavailable, use Claude instead
+  parallel_local_max_b: 8           # local models larger than this (B params) are "heavy"
+  model: "claude-sonnet-4-6"        # claude default (was claude-sonnet-4-20250514, retired)
   max_tokens: 4096
+  # Per-agent brain routing. provider: claude | ollama. Behavior contract is unchanged
+  # either way — only where the model runs differs. MCP-tool agents (NOVA/FORGE) always
+  # use Claude regardless of this map.
+  agent_models:
+    CORE:   { provider: claude, model: "claude-sonnet-4-6" }
+    NOVA:   { provider: claude, model: "claude-sonnet-4-6" }
+    FORGE:  { provider: claude, model: "claude-sonnet-4-6" }
+    SAGE:   { provider: ollama, model: "qwen2.5:14b" }
+    PULSE:  { provider: ollama, model: "qwen2.5:14b" }
+    LUNA:   { provider: ollama, model: "llama3.1:8b" }
+    NEXUS:  { provider: ollama, model: "phi4" }
+    ATLAS:  { provider: ollama, model: "qwen2.5:7b" }
+    GHOST:  { provider: ollama, model: "qwen2.5:7b" }
+    TEMPO:  { provider: ollama, model: "qwen2.5:7b" }
+    ECHO:   { provider: ollama, model: "qwen2.5:7b" }
+    VISTA:  { provider: claude, model: "claude-sonnet-4-6" }
+    SHIELD: { provider: claude, model: "claude-sonnet-4-6" }
 
 coding:
   # claude-code MCP server backing NOVA/FORGE (codeaashu/claude-code, mcp-server/).
