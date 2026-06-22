@@ -55,6 +55,19 @@ contract. `BaseAgent.think()` is the only routing point; `agents/run()` logic is
   `LocalLLMUnavailable`; when `llm.fallback_to_claude` is true, the agent transparently uses
   Claude instead (logged as a warning) and never crashes. Local host is `llm.ollama_host`
   (default `http://localhost:11434`).
+- **Reverse fallback (Claude → local)** — if a Claude call fails because Claude is unavailable
+  *to this account* — **billing** (HTTP 400 with "credit balance" in the message), **auth** (401),
+  or **quota** (429) — and `llm.claude_failure_fallback` is true, the agent retries on the local
+  model in `llm.agent_local_fallback[<AGENT>]`, logs a clear warning, and sets `ctx["degraded"]`.
+  Ordinary errors (500s, malformed-request 400s) are NOT caught — they propagate. If the agent's
+  local fallback is `null` (e.g. VISTA), `think()` raises `ClaudeUnavailable` with a human-readable,
+  speakable message; CORE speaks it and logs `status=error`, `error="claude_unavailable"`,
+  suggesting credits at console.anthropic.com or a local fallback.
+- **Degraded NOVA/FORGE generate code, never MCP edits** — in degraded (local-fallback or
+  MCP-offline) mode the claude-code MCP file tools are unavailable. NOVA must NOT claim it edited
+  files: it generates the code, returns it as detail/artifact, and offers to save it via
+  `tools/file_ops` (gated) — never via MCP. `BaseAgent.degraded(ctx)` reports the mode; FORGE
+  already writes only through `file_ops`, so it is degraded-safe by construction.
 - **MCP-tool agents must use Claude** — tool-use / MCP connectors only work on the Claude path.
   If `think()` is given `tools`/`mcp_servers` (NOVA/FORGE exploring a project), it forces the
   Claude path regardless of the agent's configured provider, and logs why.

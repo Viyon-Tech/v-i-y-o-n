@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from agents.base_agent import AgentResult
+from agents.base_agent import AgentResult, ClaudeUnavailable
 from core.router import AgentTask, RoutePlan
 
 logger = logging.getLogger("viyon.parallel")
@@ -104,6 +104,12 @@ async def _run_one(task: AgentTask, agent, ctx: dict) -> AgentResult:
         )
     try:
         return await agent.run(task.task, ctx)
+    except ClaudeUnavailable as exc:
+        # Claude is unavailable to this account and there's no local fallback.
+        logger.warning("Agent %s: %s", task.name, exc)
+        return AgentResult(
+            agent=task.name, ok=False, summary=str(exc), detail="claude_unavailable"
+        )
     except Exception as exc:
         logger.warning("Agent %s failed: %s", task.name, exc)
         return AgentResult(

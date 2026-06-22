@@ -13,10 +13,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from agents.base_agent import AgentResult, BaseAgent
+from agents.base_agent import AgentResult, BaseAgent, ClaudeUnavailable
+from agents.nova import NovaAgent
 from core.parallel import run_agents
 from core.router import AgentTask, RoutePlan
-from integrations import local_llm
+from integrations import claude_code_mcp, local_llm
+from tools import file_ops
+from tools.approval import ApprovalGate
 
 
 def fake_llm(text: str):
@@ -200,3 +203,165 @@ async def test_small_local_agents_stay_parallel():
     )
     await run_agents(plan, agents, {})
     assert shared["max"] == 2
+
+
+# -- reverse fallback (Claude unavailable → local) ---------------------------
+
+class _FakeAPIError(Exception):
+    """Stands in for an anthropic API error with a status code + message."""
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status_code = status
+        self.message = message
+
+
+def failing_llm(status: int, message: str):
+    create = AsyncMock(side_effect=_FakeAPIError(status, message))
+    return SimpleNamespace(messages=SimpleNamespace(create=create))
+
+
+def make_claude_agent(name, fallback_model, claude_failure_fallback=True, llm=None):
+    config = {
+        "llm": {
+            "agent_models": {name: {"provider": "claude", "model": "claude-sonnet-4-6"}},
+            "agent_local_fallback": {name: fallback_model},
+            "claude_failure_fallback": claude_failure_fallback,
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 256,
+        }
+    }
+    agent = _Dummy(llm=llm, tools=None, log=None, approval=None, config=config)
+    agent.name = name
+    return agent
+
+
+async def test_billing_error_triggers_local_fallback(monkeypatch):
+    spy = AsyncMock(return_value="local answer")
+    monkeypatch.setattr(local_llm, "think_local", spy)
+    agent = make_claude_agent(
+        "SHIELD", "qwen2.5:14b",
+        llm=failing_llm(400, "Your credit balance is too low to access the Anthropic API."),
+    )
+    ctx = {}
+
+    out = await agent.think("audit my dependencies", ctx)
+
+    assert out == "local answer"
+    assert ctx["degraded"] is True
+    spy.assert_awaited_once()
+    assert spy.call_args.args[0] == "qwen2.5:14b"  # the agent's configured fallback model
+
+
+async def test_auth_and_quota_errors_trigger_fallback(monkeypatch):
+    spy = AsyncMock(return_value="local")
+    monkeypatch.setattr(local_llm, "think_local", spy)
+    for status, msg in [(401, "authentication_error: invalid x-api-key"),
+                        (429, "rate limit exceeded")]:
+        agent = make_claude_agent("SHIELD", "qwen2.5:14b", llm=failing_llm(status, msg))
+        assert await agent.think("x", {}) == "local"
+    assert spy.await_count == 2
+
+
+async def test_null_fallback_reraises_clean_error():
+    agent = make_claude_agent(
+        "VISTA", None,
+        llm=failing_llm(400, "Your credit balance is too low to access the Anthropic API."),
+    )
+    with pytest.raises(ClaudeUnavailable) as ei:
+        await agent.think("design a poster", {})
+    msg = str(ei.value)
+    assert "VISTA is unavailable" in msg
+    assert "credits" in msg.lower() and "console.anthropic.com" in msg
+
+
+async def test_server_error_does_not_trigger_fallback(monkeypatch):
+    spy = AsyncMock(return_value="local")
+    monkeypatch.setattr(local_llm, "think_local", spy)
+    agent = make_claude_agent("SHIELD", "qwen2.5:14b", llm=failing_llm(500, "internal server error"))
+
+    with pytest.raises(_FakeAPIError) as ei:
+        await agent.think("audit", {})
+    assert ei.value.status_code == 500
+    spy.assert_not_called()
+
+
+async def test_malformed_400_does_not_trigger_fallback(monkeypatch):
+    """A 400 that is NOT a billing error (e.g. bad request) must propagate."""
+    spy = AsyncMock(return_value="local")
+    monkeypatch.setattr(local_llm, "think_local", spy)
+    agent = make_claude_agent("SHIELD", "qwen2.5:14b", llm=failing_llm(400, "messages: invalid role"))
+    with pytest.raises(_FakeAPIError):
+        await agent.think("x", {})
+    spy.assert_not_called()
+
+
+async def test_disabled_failure_fallback_reraises(monkeypatch):
+    monkeypatch.setattr(local_llm, "think_local", AsyncMock(return_value="local"))
+    agent = make_claude_agent(
+        "SHIELD", "qwen2.5:14b", claude_failure_fallback=False,
+        llm=failing_llm(400, "Your credit balance is too low."),
+    )
+    with pytest.raises(ClaudeUnavailable):
+        await agent.think("audit", {})
+
+
+# -- degraded NOVA: no MCP edits, writes via file_ops ------------------------
+
+async def test_degraded_nova_uses_file_ops_not_mcp(monkeypatch):
+    # Claude billing-fails; NOVA falls back to its local coder model (degraded).
+    monkeypatch.setattr(claude_code_mcp, "health_check", AsyncMock(return_value=True))
+    monkeypatch.setattr(local_llm, "think_local", AsyncMock(return_value="def fixed(): ..."))
+    write_spy = AsyncMock(return_value=(True, "wrote"))
+    monkeypatch.setattr(file_ops, "write_file", write_spy)
+
+    config = {
+        "llm": {
+            "agent_models": {"NOVA": {"provider": "claude", "model": "claude-sonnet-4-6"}},
+            "agent_local_fallback": {"NOVA": "qwen2.5-coder:7b"},
+            "claude_failure_fallback": True,
+            "model": "claude-sonnet-4-6", "max_tokens": 256,
+        },
+        "coding": {"project_path": "/tmp/proj"},
+    }
+    nova = NovaAgent(
+        llm=failing_llm(400, "Your credit balance is too low."),
+        tools=None, log=None,
+        approval=ApprovalGate(callback=lambda p: "yes", config={}),
+        config=config,
+    )
+
+    result = await nova.run("fix the bug in app.py", ctx={})
+
+    assert result.ok is True
+    assert "local" in result.summary.lower()
+    # Wrote via file_ops, NOT the MCP editor.
+    write_spy.assert_awaited_once()
+    assert write_spy.call_args.args[0].endswith("app.py")
+    # Only the failed plan attempt hit Claude — no second (MCP apply) call.
+    assert nova.llm.messages.create.call_count == 1
+    # The local coder model was used for generation.
+    local_llm.think_local.assert_awaited_once()
+    assert local_llm.think_local.call_args.args[0] == "qwen2.5-coder:7b"
+
+
+async def test_degraded_nova_review_makes_no_edits(monkeypatch):
+    """A non-mutating task in degraded mode returns analysis, no file write."""
+    monkeypatch.setattr(claude_code_mcp, "health_check", AsyncMock(return_value=True))
+    monkeypatch.setattr(local_llm, "think_local", AsyncMock(return_value="looks fine"))
+    write_spy = AsyncMock(return_value=(True, "wrote"))
+    monkeypatch.setattr(file_ops, "write_file", write_spy)
+
+    config = {"llm": {
+        "agent_models": {"NOVA": {"provider": "claude", "model": "claude-sonnet-4-6"}},
+        "agent_local_fallback": {"NOVA": "qwen2.5-coder:7b"},
+        "claude_failure_fallback": True, "model": "claude-sonnet-4-6", "max_tokens": 256,
+    }}
+    nova = NovaAgent(
+        llm=failing_llm(400, "Your credit balance is too low."),
+        tools=None, log=None, approval=None, config=config,
+    )
+    result = await nova.run("explain how the parser works", ctx={})
+    assert result.ok is True
+    assert "local mode" in result.summary.lower()
+    write_spy.assert_not_called()

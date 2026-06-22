@@ -40,6 +40,32 @@ def _parse_param_b(model: str) -> float | None:
     return _KNOWN_LOCAL_SIZES_B.get(model.lower().split(":")[0])
 
 
+class ClaudeUnavailable(RuntimeError):
+    """Claude can't serve this account (billing/auth/quota) and no local fallback exists.
+
+    Carries a human-readable, speakable message for the orchestrator.
+    """
+
+
+def _classify_claude_failure(exc: Exception) -> str | None:
+    """Classify an Anthropic error as an *account availability* problem, or None.
+
+    Returns ``"billing"`` / ``"auth"`` / ``"quota"`` for conditions that mean
+    "Claude is unavailable to this account" — the only cases we fall back on.
+    Ordinary errors (500s, malformed requests, other 400s) return None and must
+    propagate unchanged.
+    """
+    status = getattr(exc, "status_code", None) or getattr(exc, "status", None)
+    message = (getattr(exc, "message", None) or str(exc) or "").lower()
+    if status == 401 or "authentication" in message or "invalid x-api-key" in message:
+        return "auth"
+    if status == 429 or "rate limit" in message or "quota" in message:
+        return "quota"
+    if status == 400 and "credit balance" in message:
+        return "billing"
+    return None
+
+
 class AgentResult(BaseModel):
     """The structured result every agent returns.
 
@@ -131,7 +157,8 @@ class BaseAgent(ABC):
                 requested but no client, and no local fallback). The orchestrator
                 wraps this into a clean failed AgentResult.
         """
-        ctx = ctx or {}
+        # Keep the caller's dict (even if empty) so ctx["degraded"] propagates back.
+        ctx = {} if ctx is None else ctx
         history = ctx.get("history") or []
         convo = "\n".join(f"{role}: {content}" for role, content in history[-6:])
         user = task if not convo else f"Context:\n{convo}\n\nTask: {task}"
@@ -184,10 +211,70 @@ class BaseAgent(ABC):
             kwargs["mcp_servers"] = mcp_servers
             kwargs["extra_headers"] = {"anthropic-beta": "mcp-client-2025-04-04"}
 
-        response = await self.llm.messages.create(**kwargs)
+        try:
+            response = await self.llm.messages.create(**kwargs)
+        except Exception as exc:
+            reason = _classify_claude_failure(exc)
+            if reason is None:
+                raise  # ordinary error (500, malformed request) — not an account problem
+            return await self._on_claude_unavailable(reason, user, ctx)
         return "".join(
             block.text for block in response.content if getattr(block, "type", None) == "text"
         ).strip()
+
+    async def _on_claude_unavailable(self, reason: str, user: str, ctx: dict) -> str:
+        """Reverse fallback: retry on a local model, or raise a clean ClaudeUnavailable.
+
+        Sets ``ctx['degraded'] = True`` when it falls back, so MCP-tool agents
+        (NOVA/FORGE) know not to claim they used file tools.
+        """
+        fb_model = self._local_fallback_model()
+        if bool(self._conf("llm", "claude_failure_fallback", True)) and fb_model:
+            logger.warning(
+                "Claude unavailable (%s) — %s falling back to local %s.",
+                reason, self.name, fb_model,
+            )
+            ctx["degraded"] = True
+            from integrations.local_llm import LocalLLMUnavailable, think_local
+
+            try:
+                return await think_local(
+                    fb_model,
+                    self.system_prompt(),
+                    [{"role": "user", "content": user}],
+                    host=self._conf("llm", "ollama_host", "http://localhost:11434"),
+                )
+            except LocalLLMUnavailable as lexc:
+                raise ClaudeUnavailable(
+                    f"{self.name} is unavailable: Claude failed ({reason}) and the local "
+                    f"fallback {fb_model} is also unavailable. {self._fix_hint(reason)}"
+                ) from lexc
+        raise ClaudeUnavailable(self._claude_unavailable_message(reason))
+
+    def _local_fallback_model(self) -> str | None:
+        """The local model to use if Claude is unavailable for this agent (or None)."""
+        fallbacks = self._conf("llm", "agent_local_fallback", {}) or {}
+        return fallbacks.get(self.name)
+
+    def _claude_unavailable_message(self, reason: str) -> str:
+        cause = {
+            "billing": "Anthropic credits are exhausted",
+            "auth": "the Anthropic API key is invalid or unauthorized",
+            "quota": "the Anthropic quota or rate limit is exhausted",
+        }.get(reason, "Claude is unavailable")
+        return f"{self.name} is unavailable: {cause}. {self._fix_hint(reason)}"
+
+    @staticmethod
+    def _fix_hint(reason: str) -> str:
+        if reason == "billing":
+            return "Add credits at console.anthropic.com, or enable a local fallback for this agent."
+        if reason == "auth":
+            return "Fix ANTHROPIC_API_KEY, or enable a local fallback for this agent."
+        return "Try again later, raise your quota, or enable a local fallback for this agent."
+
+    def degraded(self, ctx: dict | None) -> bool:
+        """True if ``think`` fell back to a local model on this turn (read from ctx)."""
+        return bool((ctx or {}).get("degraded"))
 
     # -- provider routing --------------------------------------------------
 

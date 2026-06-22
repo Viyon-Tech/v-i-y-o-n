@@ -9,9 +9,18 @@ llm:
   default_provider: claude
   ollama_host: "http://localhost:11434"
   fallback_to_claude: true          # if a local model is unavailable, use Claude instead
+  claude_failure_fallback: true     # if Claude is unavailable (billing/auth/quota), use local
   parallel_local_max_b: 8           # local models larger than this (B params) are "heavy"
   model: "claude-sonnet-4-6"        # claude default (was claude-sonnet-4-20250514, retired)
   max_tokens: 4096
+  # Local model to use when Claude is unavailable for an agent (reverse fallback).
+  # null = no local fallback → report the failure plainly instead.
+  agent_local_fallback:
+    CORE:   "qwen2.5:14b"
+    NOVA:   "qwen2.5-coder:7b"
+    FORGE:  "qwen2.5-coder:7b"
+    SHIELD: "qwen2.5:14b"
+    VISTA:  null
   # Per-agent brain routing. provider: claude | ollama. Behavior contract is unchanged
   # either way — only where the model runs differs. MCP-tool agents (NOVA/FORGE) always
   # use Claude regardless of this map.

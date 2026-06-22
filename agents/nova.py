@@ -3,17 +3,25 @@
 NOVA attaches the claude-code MCP server so Claude can read_file / str_replace /
 bash / search_code / git on the active project. It reads and plans first, then
 gates any mutation (edit, shell, git push) through the Approval Gate before
-applying. If the MCP server is offline it degrades to plain code generation
-(no file access) and says so.
+applying.
+
+Degraded mode: if the claude-code server is offline, OR Claude is unavailable
+(billing/auth/quota) and NOVA falls back to a local model, the MCP file tools are
+NOT available. In that mode NOVA must NOT claim it edited files — it generates the
+code and offers to save it via tools/file_ops (gated), being honest that it's
+running locally.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import re
+from pathlib import Path
 
-from agents.base_agent import AgentResult, BaseAgent
+from agents.base_agent import AgentResult, BaseAgent, ClaudeUnavailable
 from integrations import claude_code_mcp
+from tools import file_ops
 
 logger = logging.getLogger("viyon.nova")
 
@@ -52,16 +60,28 @@ class NovaAgent(BaseAgent):
         project = self._project_path(ctx)
         mcp_up = await claude_code_mcp.health_check(self.config)
 
+        # No MCP server → generate-only (degraded) mode.
         if not mcp_up:
-            code = await self.think(self._frame_plan(task, project), ctx)
-            return self.succeed(
-                "The claude-code server is offline, so I generated the code without "
-                "touching your files. Review and apply it yourself.",
-                detail=code,
+            try:
+                code = await self.think(self._frame_plan(task, project), ctx)
+            except ClaudeUnavailable as exc:
+                return self.fail(str(exc), detail="claude_unavailable")
+            return await self._local_result(
+                task, project, ctx, code, note="the claude-code server is offline"
             )
 
         mcp_servers = [claude_code_mcp.server_config(self.config)]
-        plan = await self.think(self._frame_plan(task, project), ctx, mcp_servers=mcp_servers)
+        try:
+            plan = await self.think(self._frame_plan(task, project), ctx, mcp_servers=mcp_servers)
+        except ClaudeUnavailable as exc:
+            return self.fail(str(exc), detail="claude_unavailable")
+
+        # Claude billing/etc. fell back to a local model → MCP tools were NOT used.
+        if self.degraded(ctx):
+            return await self._local_result(
+                task, project, ctx, plan,
+                note="Claude is unavailable, so I'm running on a local model",
+            )
 
         if not self._is_mutation(task):
             return self.succeed(plan or "No findings.", detail=plan)
@@ -79,6 +99,38 @@ class NovaAgent(BaseAgent):
             _apply,
         )
 
+    # -- degraded (local) mode --------------------------------------------
+
+    async def _local_result(self, task: str, project: str, ctx: dict, code: str, note: str) -> AgentResult:
+        """Honest local mode: no MCP edits. Generate code; offer to save via file_ops."""
+        code = code or "(no code generated)"
+        if not self._is_mutation(task):
+            return self.succeed(
+                f"{note} — here's my analysis (local mode, no file changes).", detail=code
+            )
+
+        # Route the write through file_ops (gated) — NOT the MCP editor.
+        target = self._derive_target(task, project)
+        try:
+            ok, _ = await file_ops.write_file(
+                target, code, approval=self.approval, allowed_roots=self._roots(ctx)
+            )
+        except Exception as exc:  # e.g. path outside allowed roots
+            logger.warning("NOVA local save failed: %s", exc)
+            ok = False
+        if ok:
+            return self.succeed(
+                f"{note}, so I couldn't use the code editor. I generated the code and saved it "
+                f"to {target} via file tools.",
+                detail=code,
+                artifacts=[target],
+            )
+        return self.succeed(
+            f"{note}, so I can't edit files directly. Here's the generated code — saving to "
+            f"{target} wasn't approved, so nothing was written.",
+            detail=code,
+        )
+
     # -- helpers -----------------------------------------------------------
 
     def _project_path(self, ctx: dict) -> str:
@@ -89,6 +141,19 @@ class NovaAgent(BaseAgent):
             or self._conf("coding", "project_path", "")
             or os.getcwd()
         )
+
+    def _roots(self, ctx: dict) -> list:
+        extra = self._conf("filesystem", "allowed_paths", []) or []
+        base = (ctx or {}).get("project_dir") or (ctx or {}).get("project")
+        return [base, *extra] if base else extra
+
+    @staticmethod
+    def _derive_target(task: str, project: str) -> str:
+        """Pick an output filename from the task, else a default, under the project."""
+        m = re.search(r"[\w./-]+\.[A-Za-z0-9]+", task or "")
+        name = m.group(0) if m else "viyon_generated.txt"
+        path = Path(name)
+        return str(path if path.is_absolute() else Path(project) / path)
 
     @staticmethod
     def _is_mutation(task: str) -> bool:

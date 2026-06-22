@@ -95,8 +95,17 @@ class VIYONCore:
         for r in results:
             events.emit_agent(r.agent, "done" if r.ok else "idle")
 
-        # 3) Compose a natural spoken reply.
-        merged = await self._merge(transcript, plan, results)
+        # 3) Compose a natural spoken reply. If Claude is unavailable for an agent
+        #    and there's no local fallback, speak that plainly (don't try the LLM
+        #    merge — it would fail too).
+        claude_unavailable = any(getattr(r, "detail", None) == "claude_unavailable" for r in results)
+        if claude_unavailable:
+            merged = " ".join(r.summary for r in results if not r.ok and r.summary) or (
+                "Claude is currently unavailable for this account. Add credits at "
+                "console.anthropic.com, or enable a local fallback."
+            )
+        else:
+            merged = await self._merge(transcript, plan, results)
         self.memory.add_assistant(merged)
 
         # 4) Speak and log.
@@ -112,6 +121,7 @@ class VIYONCore:
             duration_ms=duration_ms,
             confirmed=not aborted,
             steps=[] if private else [r.model_dump() for r in results],
+            error="claude_unavailable" if claude_unavailable else None,
         )
         return merged
 
